@@ -12,13 +12,10 @@ import pandas as pd
 import time
 from utils import play_game, play_game2
 from game_environment import Snake, SnakeNumpy
-import tensorflow as tf
-from agent import DeepQLearningAgent, PolicyGradientAgent,\
-                AdvantageActorCriticAgent, mean_huber_loss
+from agent import DeepQLearningAgent, AdvantageActorCriticAgent, mean_huber_loss
 import json
 
 # some global variables
-tf.random.set_seed(42)
 version = 'v17.1'
 
 # get training configurations
@@ -49,8 +46,6 @@ agent = DeepQLearningAgent(board_size=board_size, frames=frames, n_actions=n_act
 # check in the same order as class hierarchy
 if(isinstance(agent, DeepQLearningAgent)):
     agent_type = 'DeepQLearningAgent'
-if(isinstance(agent, PolicyGradientAgent)):
-    agent_type = 'PolicyGradientAgent'
 if(isinstance(agent, AdvantageActorCriticAgent)):
     agent_type = 'AdvantageActorCriticAgent'
 print('Agent is {:s}'.format(agent_type))
@@ -155,13 +150,15 @@ for index in tqdm(range(episodes)):
         # model_logs['reward_dev'].append(round(np.std(current_rewards), 2))
         model_logs['length_mean'].append(round(int(current_lengths)/current_games, 2))
         model_logs['games'].append(current_games)
-        model_logs['loss'].append(loss)
+        model_logs['loss'].append(loss.detach().numpy())
         pd.DataFrame(model_logs)[['iteration', 'reward_mean', 'length_mean', 'games', 'loss']]\
           .to_csv('model_logs/{:s}.csv'.format(version), index=False)
+
+        print(model_logs['loss'][-1])
 
     # copy weights to target network and save models
     if((index+1)%log_frequency == 0):
         agent.update_target_net()
-        agent.save_model(file_path='models/{:s}'.format(version), iteration=(index+1))
+        agent.save_model(file_path='models/{:s}'.format("v17.2"), iteration=(index+1))
         # keep some epsilon alive for training
         epsilon = max(epsilon * decay, epsilon_end)

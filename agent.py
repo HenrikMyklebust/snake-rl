@@ -469,7 +469,6 @@ class DeepQLearningAgent(Agent):
         self._model.load_state_dict(torch.load("{}/model_{:04d}.pt".format(file_path, iteration)))
         if self._use_target_net:
             self._target_net.load_state_dict(torch.load("{}/target_model_{:04d}.pt".format(file_path, iteration)))
-        # print("Couldn't locate models at {}, check provided path".format(file_path))
 
     def print_models(self):
         """Print the current models using summary method"""
@@ -656,8 +655,9 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
         else:
             iteration = 0
 
-        self._model.load_state_dict(torch.load("{}/model_{:04d}.pt".format(file_path, iteration)))
-        self._full_model.load_state_dict(torch.load("{}/full_model_{:04d}.pt".format(file_path, iteration)))
+        checkpoint = torch.load("{}/all_models_{:04d}.pt".format(file_path, iteration))
+        self._model.load_state_dict(checkpoint['model'])
+        self._full_model.load_state_dict(checkpoint['full0'], checkpoint['full1'])
         if self._use_target_net:
             self._values_model.load_state_dict(torch.load("{}/values_model_{:04d}.pt".format(file_path, iteration)))
             self._target_net.load_state_dict(torch.load("{}/target_model_{:04d}.pt".format(file_path, iteration)))

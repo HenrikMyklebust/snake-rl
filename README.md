@@ -1,5 +1,7 @@
 # Snake Reinforcement Learning
 
+Link to PechaKucha: https://www.pechakucha.com/presentations/henriks-presentation-122
+
 Code for training a Deep Reinforcement Learning agent to play the game of Snake.
 The agent takes 2 frames of the game as input (image) and predicts the action values for
 the next action to take.

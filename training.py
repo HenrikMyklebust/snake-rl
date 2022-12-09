@@ -35,12 +35,9 @@ log_frequency = 500
 games_eval = 8
 
 # setup the agent
-agent = DeepQLearningAgent(board_size=board_size, frames=frames, n_actions=n_actions, 
-                           buffer_size=buffer_size, version=version)
-# agent = PolicyGradientAgent(board_size=board_size, frames=frames, n_actions=n_actions, 
-        # buffer_size=2000, version=version)
-# agent = AdvantageActorCriticAgent(board_size=board_size, frames=frames, n_actions=n_actions, 
-                                  # buffer_size=10000, version=version)
+#agent = DeepQLearningAgent(board_size=board_size, frames=frames, n_actions=n_actions,
+                           #buffer_size=buffer_size, version=version)
+agent = AdvantageActorCriticAgent(board_size=board_size, frames=frames, n_actions=n_actions, buffer_size=10000, version=version)
 # agent.print_models()
 
 # check in the same order as class hierarchy
@@ -150,11 +147,10 @@ for index in tqdm(range(episodes)):
         # model_logs['reward_dev'].append(round(np.std(current_rewards), 2))
         model_logs['length_mean'].append(round(int(current_lengths)/current_games, 2))
         model_logs['games'].append(current_games)
-        model_logs['loss'].append(loss.detach().numpy())
+        model_logs['loss'].append(loss)
         pd.DataFrame(model_logs)[['iteration', 'reward_mean', 'length_mean', 'games', 'loss']]\
           .to_csv('model_logs/{:s}.csv'.format(version), index=False)
 
-        print(model_logs['loss'][-1])
 
     # copy weights to target network and save models
     if((index+1)%log_frequency == 0):

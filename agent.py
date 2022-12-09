@@ -3,6 +3,7 @@ store all the agents here
 """
 import timm
 
+import AACA_model
 from replay_buffer import ReplayBuffer, ReplayBufferNumpy
 from timm import create_model
 import numpy as np
@@ -37,7 +38,7 @@ def huber_loss(y_true, y_pred, delta=1):
     loss : Tensor
         loss values for all points
     """
-    error = (y_true - y_pred)
+    error = torch.tensor(y_true - y_pred)
     quad_error = 0.5 * torch.square(error)
     lin_error = delta * (torch.abs(error) - 0.5 * delta)
     # quadratic error, linear error
@@ -64,7 +65,7 @@ def mean_huber_loss(y_true, y_pred, delta=1):
     return torch.mean(huber_loss(y_true, y_pred, delta))
 
 
-class Agent():
+class Agent:
     """Base class for all agents
     This class extends to the following classes
     DeepQLearningAgent
@@ -278,9 +279,9 @@ class DeepQLearningAgent(Agent):
         Stores the target network graph of the DQN model
     """
 
-    def __init__(self, board_size=10, frames=4, buffer_size=10000,
+    def __init__(self, board_size=10, frames=2, buffer_size=10000,
                  gamma=0.99, n_actions=3, use_target_net=True,
-                 version='v17.1'):
+                 version=''):
         """Initializer for DQN agent, arguments are same as Agent class
         except use_target_net is by default True and we call and additional
         reset models method to initialize the DQN networks
@@ -332,11 +333,11 @@ class DeepQLearningAgent(Agent):
             of shape board.shape[0] * num actions
         """
         # to correct dimensions and normalize
-        board = torch.Tensor(self._prepare_input(board))
+        board = torch.Tensor(self._prepare_input(board)).to(self.device)
         # the default model to use
         if model is None:
             model = self._model
-        return model(board).detach().numpy()
+        return model(board)
 
     def _normalize_board(self, board):
         """Normalize the board before input to the network
@@ -371,7 +372,7 @@ class DeepQLearningAgent(Agent):
             Selected action using the argmax function
         """
         # use the agent model to make the predictions
-        model_outputs = self._get_model_outputs(board, self._model)
+        model_outputs = self._get_model_outputs(board, self._model).cpu().detach().numpy()
         return np.argmax(np.where(legal_moves == 1, model_outputs, -np.inf), axis=1)
 
     def _agent_model(self):
@@ -382,18 +383,16 @@ class DeepQLearningAgent(Agent):
         model : TensorFlow Graph
             DQN model graph
         """
-        # define the input layer, shape is dependent on the board size and frames
-        with open('model_config/{:s}.json'.format(self._version), 'r') as f:
-            m = json.loads(f.read())
-
-        return DQN_model.DQNModel()
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("This model is training on: {}".format(self.device))
+        return DQN_model.DQNModel().to(self.device)
 
     def set_weights_trainable(self):
         """Set selected layers to non trainable and compile the model"""
         layer_num = 0
         for layer in self._model.parameters():
             layer_num += 1
-            if layer_num > -4:
+            if layer_num > 3:
                 layer.requires_grad_(True)
             else:
                 layer.requires_grad = False
@@ -413,7 +412,7 @@ class DeepQLearningAgent(Agent):
         model_outputs : Numpy array
             Action probabilities, shape is board.shape[0] * n_actions
         """
-        model_outputs = self._get_model_outputs(board, self._model)
+        model_outputs = self._get_model_outputs(board, self._model).cpu().detach().numpy()
         # subtracting max and taking softmax does not change output
         # do this for numerical stability
         model_outputs = np.clip(model_outputs, -10, 10)
@@ -469,7 +468,7 @@ class DeepQLearningAgent(Agent):
 
         self._model.load_state_dict(torch.load("{}/model_{:04d}.pt".format(file_path, iteration)))
         if self._use_target_net:
-            self._target_net.load_state_dict(torch.load("{}/model_{:04d}.pt".format(file_path, iteration)))
+            self._target_net.load_state_dict(torch.load("{}/target_model_{:04d}.pt".format(file_path, iteration)))
         # print("Couldn't locate models at {}, check provided path".format(file_path))
 
     def print_models(self):
@@ -480,7 +479,7 @@ class DeepQLearningAgent(Agent):
             print('Target Network')
             print(summary(self._target_net))
 
-    def train_agent(self, batch_size=32, learning_rate=0.001, num_games=1, reward_clip=False):
+    def train_agent(self, batch_size=32, learning_rate=0.0005, num_games=1, reward_clip=False):
         """Train the model by sampling from buffer and return the error.
         We are predicting the expected future discounted reward for all
         actions with our model. The target for training the model is calculated
@@ -519,20 +518,21 @@ class DeepQLearningAgent(Agent):
 
         # calculate the discounted reward, and then train accordingly
         current_model = self._target_net if self._use_target_net else self._model
-        next_model_outputs = self._get_model_outputs(next_s, current_model)
+        next_model_outputs = self._get_model_outputs(next_s, current_model).cpu().detach().numpy()
 
-        # our estimate of expexted future discounted reward
+        # our estimate of expected future discounted reward
 
-        discounted_reward = r + (self._gamma * np.max(np.where(legal_moves == 1, next_model_outputs, -np.inf),
-                                                  axis=1).reshape(-1, 1)) * (1 - done)
+        discounted_reward = r + (self._gamma * np.max(np.where(legal_moves == 1,
+                                                               next_model_outputs, -np.inf),
+                                                      axis=1).reshape(-1, 1)) * (1 - done)
 
         # create the target variable, only the column with action has different value
-        target = self._get_model_outputs(s)
+        target = self._get_model_outputs(s).cpu().detach().numpy()
         # we bother only with the difference in reward estimate at the selected action
         target = (1 - a) * target + a * discounted_reward
         # fit
         optimizer.zero_grad()
-        loss = criterion(torch.Tensor(next_model_outputs), torch.tensor(target))
+        loss = criterion(next_model_outputs, target)
         loss.requires_grad = True
         loss.backward()
         optimizer.step()
@@ -546,16 +546,6 @@ class DeepQLearningAgent(Agent):
         """
         if self._use_target_net:
             self._target_net.load_state_dict(self._model.state_dict())
-
-    def compare_weights(self):
-        """Simple utility function to check if the model and target
-        network have the same weights or not
-        """
-        for i in range(len(self._model.layers)):
-            for j in range(len(self._model.layers[i].weights)):
-                c = (self._model.layers[i].weights[j].numpy() == self._target_net.layers[i].weights[j].numpy()).all()
-
-                print('Layer {:d} Weights {:d} Match : {:d}'.format(i, j, int(c)))
 
     def copy_weights_from_agent(self, agent_for_copy):
         """Update weights between competing agents which can be used
@@ -586,7 +576,7 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
                                     buffer_size=buffer_size, gamma=gamma,
                                     n_actions=n_actions, use_target_net=use_target_net,
                                     version=version)
-        self._optimizer = tf.keras.optimizers.RMSprop(5e-4)
+
 
     def _agent_model(self):
         """Returns the models which evaluate prob logits and action values
@@ -600,17 +590,11 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
         model_full : TensorFlow Graph
             A2C model complete graph
         """
-        input_board = Input((self._board_size, self._board_size, self._n_frames,))
-        x = Conv2D(16, (3, 3), activation='relu', data_format='channels_last')(input_board)
-        x = Conv2D(32, (3, 3), activation='relu', data_format='channels_last')(x)
-        x = Flatten()(x)
-        x = Dense(64, activation='relu', name='dense')(x)
-        action_logits = Dense(self._n_actions, activation='linear', name='action_logits')(x)
-        state_values = Dense(1, activation='linear', name='state_values')(x)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model_logits = AACA_model.AACA_model_logits().to(self.device)
+        model_values = AACA_model.AACA_model_values().to(self.device)
 
-        model_logits = Model(inputs=input_board, outputs=action_logits)
-        model_full = Model(inputs=input_board, outputs=[action_logits, state_values])
-        model_values = Model(inputs=input_board, outputs=state_values)
+        model_full = model_logits, model_values
         # updates are calculated in the train_agent function
 
         return model_logits, model_full, model_values
@@ -618,7 +602,7 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
     def reset_models(self):
         """ Reset all the models by creating new graphs"""
         self._model, self._full_model, self._values_model = self._agent_model()
-        if (self._use_target_net):
+        if self._use_target_net:
             _, _, self._target_net = self._agent_model()
             self.update_target_net()
 
@@ -639,12 +623,16 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.save_weights("{}/model_{:04d}.h5".format(file_path, iteration))
-        self._full_model.save_weights("{}/model_{:04d}_full.h5".format(file_path, iteration))
-        if (self._use_target_net):
-            self._values_model.save_weights("{}/model_{:04d}_values.h5".format(file_path, iteration))
-            self._target_net.save_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
 
+        torch.save({
+            'model': self._model.state_dict(),
+            'full0': self._full_model[0].state_dict(),
+            'full1': self._full_model[1].state_dict()
+        }, "{}/all_models_{:04d}.pt".format(file_path, iteration))
+
+        if self._use_target_net:
+            torch.save(self._target_net.state_dict(), "{}/target_model_{:04d}.pt".format(file_path, iteration))
+            torch.save(self._values_model.state_dict(), "{}/values_model_{:04d}.pt".format(file_path, iteration))
     def load_model(self, file_path='', iteration=None):
         """ load any existing models, if available """
         """Load models from disk using tensorflow's
@@ -667,19 +655,20 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.load_weights("{}/model_{:04d}.h5".format(file_path, iteration))
-        self._full_model.load_weights("{}/model_{:04d}_full.h5".format(file_path, iteration))
-        if (self._use_target_net):
-            self._values_model.load_weights("{}/model_{:04d}_values.h5".format(file_path, iteration))
-            self._target_net.load_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
+
+        self._model.load_state_dict(torch.load("{}/model_{:04d}.pt".format(file_path, iteration)))
+        self._full_model.load_state_dict(torch.load("{}/full_model_{:04d}.pt".format(file_path, iteration)))
+        if self._use_target_net:
+            self._values_model.load_state_dict(torch.load("{}/values_model_{:04d}.pt".format(file_path, iteration)))
+            self._target_net.load_state_dict(torch.load("{}/target_model_{:04d}.pt".format(file_path, iteration)))
 
     def update_target_net(self):
         """Update the weights of the target network, which is kept
         static for a few iterations to stabilize the other network.
         This should not be updated very frequently
         """
-        if (self._use_target_net):
-            self._target_net.set_weights(self._values_model.get_weights())
+        if self._use_target_net:
+            self._target_net.load_state_dict(self._values_model.state_dict())
 
     def train_agent(self, batch_size=32, beta=0.001, normalize_rewards=False,
                     num_games=1, reward_clip=False):
@@ -707,6 +696,10 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
             The current loss (total loss, actor loss, critic loss)
         """
         # in policy gradient, only one complete episode is used for training
+
+        criterion = mean_huber_loss
+        optimizer = torch.optim.RMSprop(self._model.parameters(), lr=5e-4)
+
         s, a, r, next_s, done, _ = self._buffer.sample(self._buffer.get_current_size())
         s_prepared = self._prepare_input(s)
         next_s_prepared = self._prepare_input(next_s)
@@ -726,11 +719,11 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
             r = np.sign(r)
 
         # calculate V values
-        if (self._use_target_net):
-            next_s_pred = self._target_net.predict_on_batch(next_s_prepared)
+        if self._use_target_net:
+            next_s_pred = self._get_model_outputs(next_s_prepared, self._target_net).cpu().detach().numpy()
         else:
-            next_s_pred = self._values_model.predict_on_batch(next_s_prepared)
-        s_pred = self._values_model.predict_on_batch(s_prepared)
+            next_s_pred = self._get_model_outputs(next_s_prepared, self._values_model).cpu().detach().numpy()
+        s_pred = self._get_model_outputs(s_prepared, self._values_model).cpu().detach().numpy()
 
         # prepare target
         future_reward = self._gamma * next_s_pred * (1 - done)
@@ -741,21 +734,20 @@ class AdvantageActorCriticAgent(DeepQLearningAgent):
         critic_target = r + future_reward
 
         model = self._full_model
-        with tf.GradientTape() as tape:
-            model_out = model(s_prepared)
-            policy = tf.nn.softmax(model_out[0])
-            log_policy = tf.nn.log_softmax(model_out[0])
-            # calculate loss
-            J = tf.reduce_sum(tf.multiply(advantage, log_policy)) / num_games
-            entropy = -tf.reduce_sum(tf.multiply(policy, log_policy)) / num_games
-            actor_loss = -J - beta * entropy
-            critic_loss = mean_huber_loss(critic_target, model_out[1])
-            loss = actor_loss + critic_loss
-        # get the gradients
-        grads = tape.gradient(loss, model.trainable_weights)
-        # grads = [tf.clip_by_value(grad, -5, 5) for grad in grads]
-        # run the optimizer
-        self._optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        model_outputs = self._get_model_outputs(s_prepared, model[0]).cpu().detach().numpy(), \
+                        self._get_model_outputs(s_prepared, model[1]).cpu().detach().numpy()
+        policy = torch.nn.functional.softmax(torch.tensor(model_outputs[0]))
+        log_policy = torch.nn.functional.log_softmax(torch.tensor(model_outputs[0]))
+        J = torch.sum(torch.multiply(torch.tensor(advantage), log_policy)) / num_games
+        entropy = -torch.sum(torch.multiply(policy, log_policy)) / num_games
+        actor_loss = -J - beta * entropy
+        critic_loss = criterion(critic_target, model_outputs[1])
+        loss = actor_loss + critic_loss
 
-        loss = [loss.numpy(), actor_loss.numpy(), critic_loss.numpy()]
+        optimizer.zero_grad()
+        loss.requires_grad = True
+        loss.backward()
+        optimizer.step()
+
+        loss = [loss.detach().numpy(), actor_loss.detach().numpy(), critic_loss.detach().numpy()]
         return loss[0] if len(loss) == 1 else loss
